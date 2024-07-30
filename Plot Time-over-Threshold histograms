@@ -1,0 +1,131 @@
+# What it does: Given a path to a midas file (in the format .mid.lz4) it converts the file from binary 
+# and plots a histogram of the data, with an adjustable range
+
+import sys
+import midas.file_reader
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import gc
+
+# Path to the MIDAS file
+fpath = "C:/Users/Lenovo/Documents/TRIUMF General Fusion/run00067_0000.mid.lz4"
+#fpath = "/Users/ben/GeneralFusion/run00036_0000.mid.lz4"
+mfile = midas.file_reader.MidasFile(fpath, use_numpy=True)
+
+# Function to convert ADC value to time in picoseconds
+def adc2time(adcvalue):
+    return adcvalue * 3.125  # each count is 3.125 ps
+
+# Function to parse a 64-bit word into its components
+def parse_hit_word(word):
+    channel_id = (word >> 56) & 0xFF
+    edge = (word >> 48) & 0xFF
+    tot = (word >> 32) & 0xFFFF
+    toa = word & 0xFFFFFFFF
+    return channel_id, edge, tot, toa
+
+# Lists to store leading and trailing edges
+leading_edges = []
+trailing_edges = []
+
+prev_edge = None
+
+# Iterate over all events in the file
+for event in mfile:
+    if event.header.is_midas_internal_event():
+        print("Saw a special event")
+        continue
+
+    if event.header.serial_number > 10000:
+        break
+
+    for bank_name in event.banks:
+        bank = event.banks[bank_name]
+        '''
+        print(f"Bank '{bank_name}' found in event #{event.header.serial_number}")
+        print(f"Bank name: {bank.name}")
+        print(f"Bank length: {len(bank.data)}")
+        '''
+        data = bank.data
+        index = 0
+        
+        while index < len(data):
+            # Read header words
+            trigger_timestamp = data[index]
+            trigger_id = int(data[index + 1])
+            header_word2 = int(data[index + 2])
+            board_number = (header_word2 >> 32) & 0xFFFFFFFF
+            number_of_hits = header_word2 & 0xFFFFFFFF
+            
+            if trigger_id > 1163400:
+                index += 3 + number_of_hits
+                continue
+
+            index += 3  # Move past the header words
+            
+            # Read hit words
+            for _ in range(number_of_hits):
+                hit_word = int(data[index])
+                channel_id, edge, tot, toa = parse_hit_word(hit_word)
+
+                if len(leading_edges) < 100:
+                    #rint(f"Hit - Channel ID: {channel_id}, Edge: {edge}, ToT: {tot}, ToA: {toa}, ToA {adc2time(toa) + trigger_timestamp*12800}")
+                    pass
+                
+                if channel_id == 2:
+                    ts_ps = adc2time(toa) + trigger_timestamp*12800
+
+                    if edge == 1:  # leading edge
+                        if prev_edge == edge:
+                            leading_edges[-1] = ts_ps
+                        else:
+                            leading_edges.append(ts_ps)
+                    elif edge == 0:  # trailing edge
+                        if prev_edge == edge:
+                            pass
+                        elif len(leading_edges) <= len(trailing_edges):
+                            pass
+                        elif len(leading_edges) and ts_ps < leading_edges[-1]:
+                            pass
+                        else:
+                            trailing_edges.append(ts_ps)
+                
+                    prev_edge = edge
+                index += 1
+
+# Ensure the leading_edges and trailing_edges arrays are of the same length
+min_length = min(len(leading_edges), len(trailing_edges))
+leading_edges = np.array(leading_edges[:min_length])
+trailing_edges = np.array(trailing_edges[:min_length])
+
+# Calculate Time Over Threshold (ToT)
+tot = trailing_edges - leading_edges
+
+# Function to filter ToT values within a specified range
+def filter_tot(tot_values, min_value, max_value):
+    return tot_values[(tot_values >= min_value) & (tot_values <= max_value)]
+
+##################################################################################   # Define the range for ToT values to plot
+tot_min = 000    # minimum value in ps
+tot_max = 15000  # maximum value in ps
+##################################################################################
+# Filter the ToT values
+filtered_tot = filter_tot(tot, tot_min, tot_max)
+
+# Plot the histogram of Time Over Threshold (ToT)
+plt.figure(figsize=(10, 6))
+plt.hist(filtered_tot, bins=1000, edgecolor='black')
+plt.title(f"Time Over Threshold Histogram")
+plt.xlabel("Time Over Threshold (ps)")
+plt.ylabel("Count")
+
+# Change tick spacing on the x-axis
+ax = plt.gca()
+#ax.xaxis.set_major_locator(ticker.MultipleLocator(100))  # Set the tick spacing to 100 ps (or adjust as needed)
+
+plt.show()
+
+# Clear variables and run garbage collection
+del leading_edges, trailing_edges, tot
+gc.collect()
