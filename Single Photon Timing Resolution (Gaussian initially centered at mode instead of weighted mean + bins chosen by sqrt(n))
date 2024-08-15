@@ -1,0 +1,276 @@
+import midas.file_reader
+import numpy as np
+import matplotlib.pyplot as plt
+import gc
+from scipy.optimize import curve_fit
+from scipy.stats import norm
+
+# Function to convert ADC value to time in picoseconds
+def adc2time(adcvalue):
+    return adcvalue * 3.125  # each count is 3.125 ps
+
+# Function to parse a 64-bit word into its components
+def parse_hit_word(word):
+    channel_id = (word >> 56) & 0xFF
+    edge = (word >> 48) & 0xFF
+    tot = (word >> 32) & 0xFFFF
+    toa = word & 0xFFFFFFFF
+    return channel_id, edge, tot, toa
+
+# Function to extract data from a MIDAS file
+def extract_data(fpath, max_events=None):
+    mfile = midas.file_reader.MidasFile(fpath, use_numpy=True)
+    
+    leading_edges_ch1 = []
+    leading_edges_ch2 = []
+    trailing_edges_ch2 = []
+    
+    event_count = 0
+
+    for event in mfile:
+        if event.header.is_midas_internal_event():
+            continue
+
+        for bank_name in event.banks:
+            bank = event.banks[bank_name]
+            data = bank.data
+            index = 0
+
+            while index < len(data):
+                trigger_timestamp = data[index]
+                trigger_id = int(data[index + 1])
+                header_word2 = int(data[index + 2])
+                number_of_hits = header_word2 & 0xFFFFFFFF
+
+                index += 3
+
+                for _ in range(number_of_hits):
+                    hit_word = int(data[index])
+                    channel_id, edge, tot, toa = parse_hit_word(hit_word)
+                    ts_ps = adc2time(toa) + trigger_timestamp * 12800
+
+                    if channel_id == 1 and edge == 1:  # leading edge channel 1
+                        leading_edges_ch1.append(ts_ps)
+                    elif channel_id == 9:
+                        if edge == 1:  # leading edge channel 2
+                            leading_edges_ch2.append(ts_ps)
+                        elif edge == 0:  # trailing edge channel 2
+                            trailing_edges_ch2.append(ts_ps)
+
+                    index += 1
+        
+        event_count += 1
+        if max_events and event_count >= max_events:
+            break
+
+    return np.array(leading_edges_ch1), np.array(leading_edges_ch2), np.array(trailing_edges_ch2)
+
+# Function to find the closest next greatest leading edge value from channel 2 for each leading edge value in channel 1
+def find_closest_leading_edges(leading_edges_ch1, leading_edges_ch2):
+    leading_edges_ch2_sorted = np.sort(leading_edges_ch2)
+    closest_leading_edges_ch2 = []
+
+    for le in leading_edges_ch1:
+        idx = np.searchsorted(leading_edges_ch2_sorted, le, side='right')
+        if idx < len(leading_edges_ch2_sorted):
+            closest_leading_edges_ch2.append(leading_edges_ch2_sorted[idx])
+    
+    return np.array(closest_leading_edges_ch2)
+
+# Function to find the closest next greatest trailing edge value for each leading edge value in channel 2
+def find_trailing_edges(leading_edges_ch2_sampled, trailing_edges_ch2):
+    trailing_edges_ch2_sorted = np.sort(trailing_edges_ch2)
+    closest_trailing_edges = []
+
+    for le in leading_edges_ch2_sampled:
+        idx = np.searchsorted(trailing_edges_ch2_sorted, le)
+        if idx < len(trailing_edges_ch2_sorted):
+            closest_trailing_edges.append(trailing_edges_ch2_sorted[idx])
+    
+    return np.array(closest_trailing_edges)
+
+# Function to calculate ToT for channel 2
+def calculate_tot(leading_edges_ch2, trailing_edges_ch2):
+    tot_ch2 = trailing_edges_ch2 - leading_edges_ch2
+    return tot_ch2
+
+# Gaussian function for fitting
+def gaussian(x, amplitude, mean, stddev):
+    return amplitude * np.exp(-((x - mean) ** 2) / (2 * stddev ** 2))
+
+'''# Function to plot ToT values and fit a Gaussian with weighted mean and stddev
+def plot_tot_histogram(tot_ch2, tot_min, tot_max, peak_min, peak_max):
+    # Filter the ToT values within the specified range
+    filtered_tot_ch2 = tot_ch2[(tot_ch2 >= tot_min) & (tot_ch2 <= tot_max)]
+    
+    # Further filter the ToT values to isolate the desired peak
+    peak_tot_ch2 = filtered_tot_ch2[(filtered_tot_ch2 >= peak_min) & (filtered_tot_ch2 <= peak_max)]
+    
+    # Plot the histogram of ToT values
+    plt.figure(figsize=(10, 6))
+    counts, bin_edges, _ = plt.hist(peak_tot_ch2, bins=100, edgecolor='black', alpha=0.6, label='ToT Histogram')
+    
+    # Calculate weighted mean and standard deviation
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    mean = np.average(bin_centers, weights=counts)
+    variance = np.average((bin_centers - mean) ** 2, weights=counts)
+    stddev = np.sqrt(variance)
+
+    try:
+        # Fit a Gaussian to the histogram data
+        popt, _ = curve_fit(gaussian, bin_centers, counts, p0=[max(counts), mean, stddev])
+        amplitude, mean, stddev = popt
+
+        # Plot the Gaussian fit
+        plt.plot(bin_centers, gaussian(bin_centers, *popt), color='red', lw=2, label=f'Gaussian Fit\nMean: {mean:.2f} ps\n1 Sigma: {stddev:.2f} ps')
+    except Exception as e:
+        print(f"Gaussian fit failed: {e}")
+        stddev = None
+
+    plt.title("Histogram of ToT Values (Filtered by Range) with Gaussian Fit")
+    plt.xlabel("ToT (ps)")
+    plt.ylabel("Count")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    
+# Print the Gaussian fit parameters if available
+    if stddev:
+        print(f"Gaussian Fit Parameters:\nAmplitude: {amplitude}\nMean: {mean}\nStddev (1 Sigma): {stddev}")
+
+    return filtered_tot_ch2
+'''
+
+# Function to plot leading edge values versus index
+def plot_leading_edges_scatter(leading_edges_ch1, leading_edges_ch2):
+    plt.figure(figsize=(10, 6))
+    plt.scatter(range(len(leading_edges_ch1)), leading_edges_ch1, alpha=0.6, label='Channel 1 Leading Edges', color='blue')
+    plt.scatter(range(len(leading_edges_ch2)), leading_edges_ch2, alpha=0.6, label='Channel 2 Leading Edges', color='red')
+    plt.title("Scatter Plot of Leading Edge Values (Channel 1 and Channel 2) vs Index")
+    plt.xlabel("Index")
+    plt.ylabel("Leading Edge Time (ps)")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+# Function to plot histogram of leading edge differences
+def plot_leading_edge_diff_histogram(leading_edges_ch1, leading_edges_ch2):
+    leading_edge_diffs = leading_edges_ch2 - leading_edges_ch1
+    plt.figure(figsize=(10, 6))
+    plt.hist(leading_edge_diffs, bins=100, edgecolor='black', alpha=0.6, label='Leading Edge Differences')
+    plt.title("Histogram of Leading Edge Differences (Channel 2 - Channel 1)")
+    plt.xlabel("Leading Edge Difference (ps)")
+    plt.ylabel("Count")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+def plot_diff_using_tot_bounds(leading_edges_ch1, leading_edges_ch2, tot_ch2, lower_bound, upper_bound, diff_min, diff_max):
+    indices_in_range = np.where((tot_ch2 >= lower_bound) & (tot_ch2 <= upper_bound))[0]
+    filtered_leading_edges_ch1 = leading_edges_ch1[indices_in_range]
+    filtered_leading_edges_ch2 = leading_edges_ch2[indices_in_range]
+
+    leading_edge_diffs = filtered_leading_edges_ch2 - filtered_leading_edges_ch1
+    
+    # Filter the differences within the specified range
+    filtered_differences = leading_edge_diffs[(leading_edge_diffs >= diff_min) & (leading_edge_diffs <= diff_max)]
+    
+    # Plot the histogram of leading edge differences
+    plt.figure(figsize=(10, 6))
+    counts, bin_edges, _ = plt.hist(filtered_differences, bins=100, edgecolor='black', alpha=0.6, label='Leading Edge Differences (Filtered by ToT)')
+    
+    # Find the bin center corresponding to the maximum count
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    max_index = np.argmax(counts)
+    peak_center = bin_centers[max_index]
+    
+    # Calculate weighted standard deviation around this peak
+    variance = np.average((bin_centers - peak_center) ** 2, weights=counts)
+    stddev = np.sqrt(variance)
+    fwhm = 2 * np.sqrt(2 * np.log(2)) * stddev
+
+    try:
+        # Fit a Gaussian to the histogram data using the peak center as the initial mean
+        popt, _ = curve_fit(gaussian, bin_centers, counts, p0=[max(counts), peak_center, stddev])
+        amplitude, mean, stddev = popt
+
+        # Plot the Gaussian fit
+        plt.plot(bin_centers, gaussian(bin_centers, *popt), color='red', lw=2, label=f'Gaussian Fit\nMean: {mean:.2f} ps\n1 Sigma: {stddev:.2f} ps\nFWHM: {fwhm:.2f}')
+    except Exception as e:
+        print(f"Gaussian fit failed: {e}")
+        stddev = None
+
+    plt.title("Histogram of Leading Edge Differences (Channel 2 - Channel 1) within ToT Bounds with Gaussian Fit")
+    plt.xlabel("Leading Edge Difference (ps)")
+    plt.ylabel("Count")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    # Print the Gaussian fit parameters if available
+    if stddev:
+        print(f"Gaussian Fit Parameters (Differences):\nAmplitude: {amplitude}\nMean: {mean}\nStddev (1 Sigma): {stddev} \nFWHM: {fwhm:.2f}")
+
+
+        
+# Set the path to your MIDAS file
+fpath = "C:/Users/Lenovo/Documents/TRIUMF General Fusion/run00035.mid"
+
+# Set the maximum number of events to process (adjust as needed)
+max_events = 100000  # Adjust this number to reduce processing time
+
+# Define ToT range for filtering
+tot_min = 2000  # Define your ToT minimum value for filtering
+tot_max = 4700  # Define your ToT maximum value for filtering
+
+# Define ToT bounds for the last plot
+tot_lower_bound = 1085
+tot_upper_bound = 1190
+
+# Define difference range for filtering
+diff_min = 10000  # Define your minimum difference value for filtering
+diff_max = 11000  # Define your maximum difference value for filtering
+
+# Define peak range for Gaussian fitting
+peak_min = 150 # Set the minimum value for the peak range
+peak_max = 200# Set the maximum value for the peak range
+
+# Extract data from the MIDAS file
+leading_edges_ch1, leading_edges_ch2, trailing_edges_ch2 = extract_data(fpath, max_events)
+print(f"Extracted {len(leading_edges_ch1)} leading edges for channel 1")
+print(f"Extracted {len(leading_edges_ch2)} leading edges for channel 2")
+print(f"Extracted {len(trailing_edges_ch2)} trailing edges for channel 2")
+
+# Filter out the first 100 values
+leading_edges_ch1 = leading_edges_ch1[100:]
+leading_edges_ch2 = leading_edges_ch2[100:]
+trailing_edges_ch2 = trailing_edges_ch2[100:]
+
+# Find the closest next greatest leading edge value for each leading edge value in channel 1
+leading_edges_ch2_sampled = find_closest_leading_edges(leading_edges_ch1, leading_edges_ch2)
+print(f"Sampled {len(leading_edges_ch2_sampled)} leading edges for channel 2")
+
+# Find the closest next greatest trailing edge value for each sampled leading edge value in channel 2
+trailing_edges_ch2_sampled = find_trailing_edges(leading_edges_ch2_sampled, trailing_edges_ch2)
+print(f"Found {len(trailing_edges_ch2_sampled)} trailing edges for sampled channel 2")
+
+# Calculate ToT for sampled channel 2 data
+tot_ch2_sampled = calculate_tot(leading_edges_ch2_sampled, trailing_edges_ch2_sampled)
+print(f"Calculated {len(tot_ch2_sampled)} ToT values for sampled channel 2")
+
+# Plot the ToT histogram for sampled data and fit a Gaussian
+#filtered_tot_ch2_sampled = plot_tot_histogram(tot_ch2_sampled, tot_min, tot_max, peak_min, peak_max)
+
+# Plot the scatter plot of leading edge values versus index
+plot_leading_edges_scatter(leading_edges_ch1, leading_edges_ch2_sampled)
+
+# Plot the histogram of leading edge differences
+plot_leading_edge_diff_histogram(leading_edges_ch1, leading_edges_ch2_sampled)
+
+# Plot the histogram of leading edge differences using ToT bounds
+plot_diff_using_tot_bounds(leading_edges_ch1, leading_edges_ch2_sampled, tot_ch2_sampled, tot_lower_bound, tot_upper_bound, diff_min, diff_max)
+4
+# Clean up memory
+gc.collect()
