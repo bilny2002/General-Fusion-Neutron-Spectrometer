@@ -1,0 +1,183 @@
+#Given a specific ToT range, it plots a ToT plot, detects peaks 
+# (using modifiable "minimum peak height" and "minimum distance 
+" between peaks" parameters in line 110) and then uses their mean ToTs to plot a
+# "peak number vs ToT" plot, and fits it to a linear plot.
+
+import sys
+import midas.file_reader
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks
+from scipy.optimize import curve_fit
+import gc
+
+# Path to the MIDAS file
+fpath = "C:/Users/Lenovo/Documents/TRIUMF General Fusion/run00116_0000.mid.lz4"
+
+# Function to convert ADC value to time in picoseconds
+def adc2time(adcvalue):
+    return adcvalue * 3.125  # each count is 3.125 ps
+
+# Function to parse a 64-bit word into its components
+def parse_hit_word(word):
+    channel_id = (word >> 56) & 0xFF
+    edge = (word >> 48) & 0xFF
+    tot = (word >> 32) & 0xFFFF
+    toa = word & 0xFFFFFFFF
+    return channel_id, edge, tot, toa
+
+# Process the MIDAS file and extract ToT values
+def process_file(fpath):
+    mfile = midas.file_reader.MidasFile(fpath, use_numpy=True)
+
+    leading_edges = []
+    trailing_edges = []
+
+    prev_edge = None
+
+    for event in mfile:
+        if event.header.is_midas_internal_event():
+            continue
+        if event.header.serial_number > 10000:
+            break
+
+        for bank_name in event.banks:
+            bank = event.banks[bank_name]
+            data = bank.data
+            index = 0
+
+            while index < len(data):
+                trigger_timestamp = data[index]
+                trigger_id = int(data[index + 1])
+                header_word2 = int(data[index + 2])
+                board_number = (header_word2 >> 32) & 0xFFFFFFFF
+                number_of_hits = header_word2 & 0xFFFFFFFF
+
+                if trigger_id > 1163400:
+                    index += 3 + number_of_hits
+                    continue
+
+                index += 3
+
+                for _ in range(number_of_hits):
+                    hit_word = int(data[index])
+                    channel_id, edge, tot, toa = parse_hit_word(hit_word)
+
+                    if channel_id == 2:
+                        ts_ps = adc2time(toa) + trigger_timestamp * 12800
+
+                        if edge == 1:  # leading edge
+                            if prev_edge == edge:
+                                leading_edges[-1] = ts_ps
+                            else:
+                                leading_edges.append(ts_ps)
+                        elif edge == 0:  # trailing edge
+                            if prev_edge == edge:
+                                pass
+                            elif len(leading_edges) <= len(trailing_edges):
+                                pass
+                            elif len(leading_edges) and ts_ps < leading_edges[-1]:
+                                pass
+                            else:
+                                trailing_edges.append(ts_ps)
+
+                        prev_edge = edge
+                    index += 1
+
+    min_length = min(len(leading_edges), len(trailing_edges))
+    leading_edges = np.array(leading_edges[:min_length])
+    trailing_edges = np.array(trailing_edges[:min_length])
+    tot = trailing_edges - leading_edges
+
+    return tot
+
+# Process the file and get ToT values
+tot = process_file(fpath)
+
+# Define the range for filtering ToT values
+tot_min = 0                                                                # Minimum ToT value for the range
+tot_max = 5000                                                                # Maximum ToT value for the range
+
+# Filter the ToT values based on the specified range
+filtered_tot = tot[(tot >= tot_min) & (tot <= tot_max)]
+
+# Plot the histogram of filtered Time Over Threshold (ToT)
+plt.figure(figsize=(10, 6))
+counts, bin_edges, _ = plt.hist(filtered_tot, bins=100, edgecolor='black')
+plt.title(f"Filtered Time Over Threshold Histogram ({tot_min} <= ToT <= {tot_max} ps)")
+plt.xlabel("Time Over Threshold (ps)")
+plt.ylabel("Count")
+
+# Detect peaks in the histogram
+bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+peaks, properties = find_peaks(counts, height=500, distance=5)                  # Adjusted height and distance to match the parent code
+
+# Mark the detected peaks with vertical lines
+plt.figure(figsize=(10, 6))
+plt.hist(filtered_tot, bins=100, edgecolor='black', alpha=0.6, label='Histogram')
+for peak in peaks:
+    plt.axvline(bin_centers[peak], color='red', linestyle='--')
+    plt.text(bin_centers[peak], counts[peak], f'{bin_centers[peak]:.2f}', color='red', ha='center', va='bottom')
+
+plt.title(f"Filtered Time Over Threshold Histogram with Peaks Marked ({tot_min} <= ToT <= {tot_max} ps)")
+plt.xlabel("Time Over Threshold (ps)")
+plt.ylabel("Count")
+plt.legend()
+plt.show()
+
+# Extract the centers of the bars at the peak positions
+peak_centers = bin_centers[peaks]
+peak_counts = counts[peaks]
+
+# Number the peaks (starting from 1)
+peak_numbers = np.arange(1, len(peak_centers) + 1)
+
+# Plot the peak centers separately with numbering as the x-axis
+plt.figure(figsize=(10, 6))
+plt.scatter(peak_numbers, peak_centers, color='red', label='Peak Centers')
+plt.title("Detected Peak Centers")
+plt.xlabel("Peak Number")
+plt.ylabel("Time Over Threshold (ps)")
+plt.legend()
+plt.show()
+
+# Define the linear function to fit the peak centers
+def linear(x, m, c):
+    return m * x + c
+
+# Fit the linear function to the peak centers
+popt, pcov = curve_fit(linear, peak_numbers, peak_centers)
+
+# Generate x values for the fitted curve
+x_fit = np.linspace(min(peak_numbers), max(peak_numbers), 1000)
+y_fit = linear(x_fit, *popt)
+
+# Calculate the deviations
+deviations = peak_centers - linear(peak_numbers, *popt)
+
+# Plot the peak centers and the fitted curve with error bars for deviations
+plt.figure(figsize=(10, 6))
+plt.scatter(peak_numbers, peak_centers, color='red', label='Peak Centers')
+plt.errorbar(peak_numbers, peak_centers, yerr=np.abs(deviations), fmt='o', color='red', ecolor='black', capsize=5)
+plt.plot(x_fit, y_fit, label=f'Linear Fit: y = {popt[0]:.2f}x + {popt[1]:.2f}', color='blue')
+
+# Add labels for the deviations
+for i in range(len(peak_numbers)):
+    plt.text(peak_numbers[i], peak_centers[i] + np.abs(deviations)[i] +15 , f'{deviations[i]:.2f}', color='black', ha='center')
+
+plt.title("Detected Peak Centers with Linear Fit and Deviations")
+plt.xlabel("Peak Number")
+plt.ylabel("Time Over Threshold (ps)")
+plt.legend()
+plt.show()
+
+# Print the fitted parameters
+print(f"Fitted parameters: m={popt[0]}, c={popt[1]}")
+
+# Store peak data in arrays
+peak_numbers_set2 = peak_numbers
+peak_centers_set2 = peak_centers
+
+# Clear variables and run garbage collection
+del tot
+gc.collect()
