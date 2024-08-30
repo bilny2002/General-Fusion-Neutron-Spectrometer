@@ -1,4 +1,4 @@
-# code for plotting time difference between SiPM hits
+# code for plotting time difference between SiPM hits 
 # it determines the range of values to be plotted using manually chosen percentiles, i.e plots data between the 15th and 95th percentile
 
 import midas.file_reader
