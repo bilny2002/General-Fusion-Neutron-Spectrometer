@@ -28,4 +28,60 @@ Make sure that Python 3.12 is installed on your machine, otherwise you can manua
 4) Now run jupyter notebook by using the following command
    - `Jupyter Notebook`
 
+**Important information for using code scripts in the repository**
+
+- When running the scripts, make sure that the channel you are reading from in your script is correct. When extracting data from midas, almost the same function is used in all the scripts: (the code pasted here actually is for extracting data from two different channels - ch 9 and ch 1)
+```
+def extract_data(fpath, max_events=None):
+    mfile = midas.file_reader.MidasFile(fpath, use_numpy=True)
+    
+    leading_edges_ch1 = []
+    leading_edges_ch2 = []
+    trailing_edges_ch2 = []
+    
+    event_count = 0
+
+    for event in mfile:
+        if event.header.is_midas_internal_event():
+            continue
+
+        for bank_name in event.banks:
+            bank = event.banks[bank_name]
+            data = bank.data
+            index = 0
+
+            while index < len(data):
+                trigger_timestamp = data[index]
+                trigger_id = int(data[index + 1])
+                header_word2 = int(data[index + 2])
+                number_of_hits = header_word2 & 0xFFFFFFFF
+
+                index += 3
+
+                for _ in range(number_of_hits):
+                    hit_word = int(data[index])
+                    channel_id, edge, tot, toa = parse_hit_word(hit_word)
+                    ts_ps = adc2time(toa) + trigger_timestamp * 12800
+
+                    if channel_id == 1 and edge == 1:  # leading edge channel 1
+                        leading_edges_ch1.append(ts_ps)
+                    elif channel_id == 9:
+                        if edge == 1:  # leading edge channel 2
+                            leading_edges_ch2.append(ts_ps)
+                        elif edge == 0:  # trailing edge channel 2
+                            trailing_edges_ch2.append(ts_ps)
+
+                    index += 1
+        
+        event_count += 1
+        if max_events and event_count >= max_events:
+            break
+
+    return np.array(leading_edges_ch1), np.array(leading_edges_ch2), np.array(trailing_edges_ch2)
+
+```
+Make note of the fact that `channel_id` is the variable you would want to look at for changing channel ID.
+Also most of the code scripts have an option to change the range of the data that the histogram is plotting, so those are changeable as well.
+
+**Specific information about the Single Photon Timing Resolution (SPTR) plots**
 
