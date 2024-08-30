@@ -1,0 +1,123 @@
+# Fits an exponential function over the "time difference between hits plot"
+# and outputs the fit equation
+
+import midas.file_reader
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+
+# Path to the MIDAS file
+fpath = "C:/Users/Lenovo/Documents/TRIUMF General Fusion/run00070_0000.mid.lz4"
+mfile = midas.file_reader.MidasFile(fpath, use_numpy=True)
+
+# Function to convert ADC value to time in picoseconds
+def adc2time(adcvalue):
+    return adcvalue * 3.125  # each count is 3.125 ps
+
+# Function to parse a 64-bit word into its components
+def parse_hit_word(word):
+    channel_id = (word >> 56) & 0xFF
+    edge = (word >> 48) & 0xFF
+    tot = (word >> 32) & 0xFFFF
+    toa = word & 0xFFFFFFFF
+    return channel_id, edge, tot, toa
+
+# Lists to store leading edges and ToT values for channel 2
+leading_edges_ch2 = []
+tot_ch2 = []
+
+# Iterate over all events in the file
+for event in mfile:
+    if event.header.is_midas_internal_event():
+        continue
+
+    for bank_name in event.banks:
+        bank = event.banks[bank_name]
+        data = bank.data
+        index = 0
+        
+        while index < len(data):
+            # Read header words
+            trigger_timestamp = data[index]
+            trigger_id = int(data[index + 1])
+            header_word2 = int(data[index + 2])
+            number_of_hits = header_word2 & 0xFFFFFFFF
+            
+            index += 3  # Move past the header words
+            
+            # Read hit words
+            for _ in range(number_of_hits):
+                hit_word = int(data[index])
+                channel_id, edge, tot, toa = parse_hit_word(hit_word)
+                ts_ps = adc2time(toa) + trigger_timestamp * 12800
+
+                if channel_id == 2:
+                    if edge == 1:  # leading edge for channel 2
+                        leading_edges_ch2.append(ts_ps)
+                    elif edge == 0:  # trailing edge for channel 2
+                        if len(leading_edges_ch2) <= len(tot_ch2):
+                            pass  # Ignore unmatched trailing edge
+                        else:
+                            trailing_edge = ts_ps
+                            leading_edge = leading_edges_ch2[len(tot_ch2)]
+                            tot_value = trailing_edge - leading_edge
+                            tot_ch2.append(tot_value)
+
+                index += 1
+
+# Ensure the leading_edges and tot_ch2 arrays are of the same length
+min_length = min(len(leading_edges_ch2), len(tot_ch2))
+leading_edges_ch2 = np.array(leading_edges_ch2[:min_length])
+tot_ch2 = np.array(tot_ch2[:min_length])
+
+# Filter the data for Channel 2 ToT values within the desired range
+tot_range = (0, 2900)                                                                         # Replace with desired ToT range
+filtered_indices = (tot_ch2 >= tot_range[0]) & (tot_ch2 <= tot_range[1])
+filtered_leading_edges = leading_edges_ch2[filtered_indices]
+
+# Calculate time differences between each hit
+sorted_leading_edges = np.sort(filtered_leading_edges)
+time_differences = np.diff(sorted_leading_edges)
+
+# Automatically determine a suitable range using the interquartile range (IQR)
+def determine_hist_range(data):
+    q1 = np.percentile(data, 15)
+    q3 = np.percentile(data, 95)
+    iqr = q3 - q1
+    lower_bound = max(0, q1 - 1.5 * iqr)
+    upper_bound = q3 + 1.5 * iqr
+    return lower_bound, upper_bound
+
+# Plot histogram with automatically determined range
+def plot_histogram_with_fit(time_differences):
+    hist_range = determine_hist_range(time_differences)
+    filtered_time_differences = time_differences[(time_differences >= hist_range[0]) & (time_differences <= hist_range[1])]
+    
+    counts, bin_edges = np.histogram(filtered_time_differences, bins=100)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    # Define the exponential decay function for curve fitting
+    def exponential_decay(x, a, b, c):
+        return a * np.exp(-b * x) + c
+
+    # Provide better initial guesses for the parameters
+    initial_guess = [np.max(counts), 1/np.mean(filtered_time_differences), np.min(counts)]
+
+    # Perform curve fitting with increased maxfev
+    popt, _ = curve_fit(exponential_decay, bin_centers, counts, p0=initial_guess, maxfev=1000)
+
+    # Plot the histogram and the fitted curve
+    plt.figure(figsize=(10, 6))
+    plt.hist(filtered_time_differences, bins=100, edgecolor='black', alpha=0.7, label='Histogram')
+    plt.plot(bin_centers, exponential_decay(bin_centers, *popt), 'r-', label='Exponential fit')
+    plt.title("Histogram of Time Differences between Hits (Channel 2) with Exponential Fit")
+    plt.xlabel("Time Difference (ps)")
+    plt.ylabel("Count")
+    plt.legend()
+    plt.show()
+
+    # Output the equation of the fit
+    print(f"Fitted Exponential Decay Function: y = {popt[0]:.3e} * exp(-{popt[1]:.3e} * x) + {popt[2]:.3e}")
+
+# Plot the histogram with exponential fit
+plot_histogram_with_fit(time_differences)
