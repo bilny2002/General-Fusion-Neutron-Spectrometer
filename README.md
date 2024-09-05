@@ -85,3 +85,34 @@ Also most of the code scripts have an option to change the range of the data tha
 
 **Specific information about the Single Photon Timing Resolution (SPTR) plots**
 
+
+Here is the code block where use input is required:
+
+```
+# Set the path to your MIDAS file
+fpath = "C:/Users/Lenovo/Documents/TRIUMF General Fusion/run00035.mid"
+
+# Set the maximum number of events to process (adjust as needed)
+max_events = 100000  # Adjust this number to reduce processing time
+
+# Define ToT range for filtering
+tot_min = 2000  # Define your ToT minimum value for filtering
+tot_max = 4700  # Define your ToT maximum value for filtering
+
+# Define ToT bounds for the last plot
+tot_lower_bound = 1085
+tot_upper_bound = 1190
+
+# Define difference range for filtering
+diff_min = 10000  # Define your minimum difference value for filtering
+diff_max = 11000  # Define your maximum difference value for filtering
+
+# Define peak range for Gaussian fitting
+peak_min = 150 # Set the minimum value for the peak range
+peak_max = 200# Set the maximum value for the peak range
+```
+Most of these inputs are straightforward, here is clarification for a few:
+- **tot_min / tot_max** : This is irrelevant, so feel free to ignore this.
+- **tot_lower_bound/ tot_upper_bound** : this is where you actually define the ToT range to be filtered, before finding and plotting the differences
+- diff_min/diff_max: This is for plotting the final "time differences between laser and SiPM" plot. You can specify the range to see a "zoomed-in" or "oomed-out" version of the plot.
+- peak_min/ peak_min: This is for the gaussian curve-fit parameters
