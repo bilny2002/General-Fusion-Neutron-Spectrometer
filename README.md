@@ -6,9 +6,10 @@ This repository contains Python code that can be used to analyze the TDC data ta
 
 Almost all the code files use the function midas.file_reader, and in order to run the code you will have to install the Midas module on your console, as well as the numpy and matplotlib libraries.
 
+**Instructions for installing Midas and setting up a virtual environment**
+
 **Note that these instructions are for Windows OS**
 
-**Instructions for installing Midas and setting up a virtual environment**
 
 Make sure that Python 3.12 is installed on your machine, otherwise you can manually download it from the app store. 
 
