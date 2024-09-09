@@ -28,7 +28,8 @@ Make sure that Python 3.12 is installed on your machine, otherwise you can manua
 4) Now run jupyter notebook by using the following command
    - `Jupyter Notebook`
 
-**A guide to setting up the TDC hardware**
+**A guide to setting up the TDC hardware and naigating the Midas frontend**
+[View the GenFusion TDC Setup PDF](./GenFusion%20TDC%20set_up.pdf)
 
 **Important information for using code scripts in the repository**
 
