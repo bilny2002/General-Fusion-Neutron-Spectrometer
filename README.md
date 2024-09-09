@@ -28,6 +28,8 @@ Make sure that Python 3.12 is installed on your machine, otherwise you can manua
 4) Now run jupyter notebook by using the following command
    - `Jupyter Notebook`
 
+**A guide to setting up the TDC hardware**
+
 **Important information for using code scripts in the repository**
 
 - When running the scripts, make sure that the channel you are reading from in your script is correct. When extracting data from midas, almost the same function is used in all the scripts: (the code pasted here actually is for extracting data from two different channels - ch 9 and ch 1)
@@ -114,5 +116,5 @@ peak_max = 200# Set the maximum value for the peak range
 Most of these inputs are straightforward, here is clarification for a few:
 - **tot_min / tot_max** : This is irrelevant, so feel free to ignore this.
 - **tot_lower_bound/ tot_upper_bound** : this is where you actually define the ToT range to be filtered, before finding and plotting the differences
-- diff_min/diff_max: This is for plotting the final "time differences between laser and SiPM" plot. You can specify the range to see a "zoomed-in" or "oomed-out" version of the plot.
+- diff_min/diff_max: This is for plotting the final "time differences between laser and SiPM" plot. You can specify the range to see a "zoomed-in" or "zoomed-out" version of the plot.
 - peak_min/ peak_min: This is for the gaussian curve-fit parameters
